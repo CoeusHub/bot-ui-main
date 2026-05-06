@@ -4,6 +4,7 @@ export interface MenuItem {
   label: string
   icon: string
   component: () => Promise<any>
+  adminOnly?: boolean
 }
 
 export const menuRoutes: MenuItem[] = [
@@ -48,5 +49,21 @@ export const menuRoutes: MenuItem[] = [
     label: '设置',
     icon: 'i-carbon-settings',
     component: () => import('@/views/Settings.vue'),
+  },
+  {
+    path: 'admin/users',
+    name: 'admin-users',
+    label: '用户管理',
+    icon: 'i-carbon-group',
+    component: () => import('@/views/admin/Users.vue'),
+    adminOnly: true,
+  },
+  {
+    path: 'admin/cdkeys',
+    name: 'admin-cdkeys',
+    label: '卡密管理',
+    icon: 'i-carbon-password',
+    component: () => import('@/views/admin/Cdkeys.vue'),
+    adminOnly: true,
   },
 ]

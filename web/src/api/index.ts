@@ -11,10 +11,18 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  const token = tokenRef.value
-  if (token) {
-    config.headers['x-admin-token'] = token
+  // 管理员 token
+  const adminToken = tokenRef.value
+  if (adminToken) {
+    config.headers['x-admin-token'] = adminToken
   }
+
+  // 用户 JWT token（优先于 admin token 时也发送）
+  const userToken = localStorage.getItem('user_token')
+  if (userToken) {
+    config.headers['Authorization'] = `Bearer ${userToken}`
+  }
+
   const accountId = accountIdRef.value
   if (accountId) {
     config.headers['x-account-id'] = accountId
@@ -31,16 +39,21 @@ api.interceptors.response.use((response) => {
 
   if (error.response) {
     if (error.response.status === 401) {
-      // Avoid redirect loop or multiple redirects
       if (!window.location.pathname.includes('/login')) {
+        // 根据当前使用的 token 类型跳转对应登录页
+        const hasUserToken = !!localStorage.getItem('user_token')
         tokenRef.value = ''
-        window.location.href = '/login'
+        localStorage.removeItem('user_token')
+        if (hasUserToken) {
+          window.location.href = '/user/login'
+        } else {
+          window.location.href = '/login'
+        }
         toast.warning('登录已过期，请重新登录')
       }
     }
     else if (error.response.status >= 500) {
       const backendError = String(error.response.data?.error || error.response.data?.message || '')
-      // 后端运行态可预期错误：不弹全局500，交给页面状态处理
       if (backendError === '账号未运行' || backendError === 'API Timeout') {
         return Promise.reject(error)
       }
@@ -48,8 +61,6 @@ api.interceptors.response.use((response) => {
     }
     else {
       const msg = error.response.data?.message || error.message
-      // Don't show toast for 404 if it's expected in some logic?
-      // Generally for API calls, 404 is an error.
       toast.error(`请求失败: ${msg}`)
     }
   }

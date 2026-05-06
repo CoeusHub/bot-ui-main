@@ -70,7 +70,10 @@ function startAdminServer(dataProvider) {
     app.use(express.json());
 
     // 挂载用户 API（注册/登录），不经过 admin 鉴权
-    mountUserAPI(app);
+    mountUserAPI(app,
+        () => provider,
+        () => (provider && provider.getWorkerControls ? provider.getWorkerControls() : {}),
+    );
 
     const tokens = new Set();
 
@@ -80,19 +83,36 @@ function startAdminServer(dataProvider) {
         if (store.getDisablePasswordAuth && store.getDisablePasswordAuth()) {
             return next();
         }
-        
-        const token = req.headers['x-admin-token'];
-        if (!token || !tokens.has(token)) {
-            return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+        // 先检查 x-admin-token（管理员）
+        const adminToken = req.headers['x-admin-token'];
+        if (adminToken && tokens.has(adminToken)) {
+            req.adminToken = adminToken;
+            return next();
         }
-        req.adminToken = token;
-        next();
+
+        // 再检查 JWT（普通用户）
+        const authHeader = req.headers['authorization'] || '';
+        const jwtToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+        if (jwtToken) {
+            const { verifyJWT, checkAndFreezeExpired } = require('../services/user-auth');
+            const payload = verifyJWT(jwtToken);
+            if (payload && payload.userId) {
+                const { expired } = checkAndFreezeExpired(payload.userId);
+                if (!expired) {
+                    req.user = { userId: payload.userId, role: payload.role || 'user' };
+                    return next();
+                }
+            }
+        }
+
+        return res.status(401).json({ ok: false, error: 'Unauthorized' });
     };
 
     app.use((req, res, next) => {
         res.header('Access-Control-Allow-Origin', '*');
         res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, x-account-id, x-admin-token');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, x-account-id, x-admin-token, Authorization');
         if (req.method === 'OPTIONS') return res.sendStatus(200);
         next();
     });
@@ -104,9 +124,26 @@ function startAdminServer(dataProvider) {
         keyGenerator: (req) => req.ip,
     }));
 
+    // 访问根路径 → 默认跳转用户登录页
+    app.get('/', (req, res) => {
+        res.redirect(302, '/user/login');
+    });
+
     const webDist = path.join(__dirname, '../../../web/dist');
     if (fs.existsSync(webDist)) {
-        app.use(express.static(webDist));
+        // index.html 禁止缓存，确保浏览器始终加载最新版本
+        app.use(express.static(webDist, {
+            setHeaders(res, filePath) {
+                if (filePath.endsWith('index.html')) {
+                    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                    res.setHeader('Pragma', 'no-cache');
+                    res.setHeader('Expires', '0');
+                } else {
+                    // 带 hash 的资源文件可以长期缓存
+                    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                }
+            },
+        }));
     } else {
         adminLogger.warn('web build not found', { webDist });
         app.get('/', (req, res) => res.send('web build not found. Please build the web project.'));
@@ -149,6 +186,8 @@ function startAdminServer(dataProvider) {
 
     app.use('/api', (req, res, next) => {
         if (req.path === '/login' || req.path === '/qr/create' || req.path === '/qr/check' || req.path === '/auth/validate' || req.path === '/admin/password-auth-status') return next();
+        // 用户 API 不走 admin 鉴权（自带 JWT 验证）
+        if (req.path.startsWith('/user/')) return next();
         return authRequired(req, res, next);
     });
 
@@ -958,6 +997,178 @@ function startAdminServer(dataProvider) {
             res.json({ ok: true, data });
         } catch (e) {
             handleApiError(res, e);
+        }
+    });
+
+    // ============ 管理员：用户管理 ============
+    app.get('/api/admin/users', (req, res) => {
+        try {
+            const { getUserList } = require('../services/user-auth');
+            const list = getUserList();
+            res.json({ ok: true, data: list });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/admin/users/:userId/status', (req, res) => {
+        try {
+            const { loadUsers, saveUsers } = require('../services/user-auth');
+            const { userId } = req.params;
+            const { status } = req.body || {};
+            const db = loadUsers();
+            const user = db.users[userId];
+            if (!user) return res.status(404).json({ ok: false, error: '用户不存在' });
+            if (status) user.status = status;
+            user.updatedAt = Date.now();
+            saveUsers(db);
+            res.json({ ok: true, data: { userId, status: user.status } });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // 管理员手动延期（不消耗卡密）
+    app.post('/api/admin/users/:userId/extend', (req, res) => {
+        try {
+            const { extendUserExpiry } = require('../services/user-auth');
+            const { userId } = req.params;
+            const days = Math.max(1, Number(req.body.days) || 30);
+            const result = extendUserExpiry(userId, days);
+            if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+            res.json({ ok: true, data: { userId, days, expireAt: result.expireAt } });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // ============ 管理员：卡密管理 ============
+    app.get('/api/admin/cdkey-stats', (req, res) => {
+        try {
+            const { getCDKeyStats } = require('../services/cdkey');
+            res.json({ ok: true, data: getCDKeyStats() });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/admin/cdkeys/import', (req, res) => {
+        try {
+            const { importCDKeyHashes } = require('../services/cdkey');
+            const { hashes } = req.body || {};
+            if (!Array.isArray(hashes) || hashes.length === 0) {
+                return res.status(400).json({ ok: false, error: '请提供卡密哈希列表' });
+            }
+            const result = importCDKeyHashes(hashes);
+            res.json({ ok: true, data: result });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/admin/cdkeys/generate', (req, res) => {
+        try {
+            const { generateCDKeys, importCDKeyHashes } = require('../services/cdkey');
+            const { type, days, count } = req.body || {};
+            const n = Math.min(Math.max(1, Number(count) || 1), 100);
+            const t = ['day', 'month', 'permanent'].includes(type) ? type : 'day';
+            const d = t === 'permanent' ? 0 : Math.max(1, Number(days) || 30);
+
+            const { plaintext, hashes } = generateCDKeys(n, t, d);
+            importCDKeyHashes(hashes);
+
+            res.json({
+                ok: true,
+                data: { plaintext, type: t, days: d, count: n },
+            });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // ============ 管理员：统一下发策略 ============
+    app.post('/api/admin/policies', (req, res) => {
+        try {
+            const { loadUsers, saveUsers } = require('../services/user-auth');
+            const { ensureUserDataDir, getUserDataDir } = require('../config/runtime-paths');
+            const { readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
+            const body = req.body || {};
+            const userIds = body.userIds || [];
+            const policyConfig = body.policyConfig || {};
+
+            if (!Array.isArray(userIds) || userIds.length === 0) {
+                return res.status(400).json({ ok: false, error: '请选择至少一个用户' });
+            }
+
+            let applied = 0;
+            const db = loadUsers();
+
+            for (const userId of userIds) {
+                const user = db.users[userId];
+                if (!user) continue;
+
+                const dir = getUserDataDir(userId);
+                ensureUserDataDir(userId);
+                const file = dir + '/store.json';
+                const current = readJsonFile(file, () => ({}));
+
+                // 合并策略：管理员下发的作为默认值（defaultAccountConfig），用户已有的自定义值保留
+                if (policyConfig.automation) {
+                    current.defaultAccountConfig = current.defaultAccountConfig || {};
+                    current.defaultAccountConfig.automation = {
+                        ...(current.defaultAccountConfig.automation || {}),
+                        ...policyConfig.automation,
+                    };
+                }
+                if (policyConfig.intervals) {
+                    current.defaultAccountConfig = current.defaultAccountConfig || {};
+                    current.defaultAccountConfig.intervals = {
+                        ...(current.defaultAccountConfig.intervals || {}),
+                        ...policyConfig.intervals,
+                    };
+                }
+                if (policyConfig.plantingStrategy) {
+                    current.plantingStrategy = policyConfig.plantingStrategy;
+                }
+                if (policyConfig.preferredSeedId) {
+                    current.preferredSeedId = policyConfig.preferredSeedId;
+                }
+                if (policyConfig.friendBlockLevel) {
+                    current.friendBlockLevel = policyConfig.friendBlockLevel;
+                }
+                if (policyConfig.friendQuietHours) {
+                    current.friendQuietHours = policyConfig.friendQuietHours;
+                }
+
+                current._adminPolicyAppliedAt = Date.now();
+                writeJsonFileAtomic(file, current);
+                applied++;
+            }
+
+            res.json({ ok: true, data: { applied, total: userIds.length } });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // ============ 管理员：在线状态 ============
+    app.get('/api/admin/online-workers', (req, res) => {
+        try {
+            const list = [];
+            if (provider && provider.getWorkerControls) {
+                const { workers } = provider.getWorkerControls();
+                for (const [id, w] of Object.entries(workers || {})) {
+                    list.push({
+                        accountId: id,
+                        name: w.name || '',
+                        userId: w.userId || '',
+                        connected: !!(w.status && w.status.connection && w.status.connection.connected),
+                    });
+                }
+            }
+            res.json({ ok: true, data: list });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
         }
     });
 

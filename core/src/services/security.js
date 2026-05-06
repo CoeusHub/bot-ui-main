@@ -14,8 +14,8 @@ const SECURITY_CONFIG = {
     minPasswordLength: 4,
     maxPasswordLength: 64,
     enablePasswordStrengthCheck: true,
-    maxLoginAttempts: 5,      // 最大登录尝试次数
-    lockoutDuration: 300000,  // 锁定时长(ms) 5分钟
+    maxLoginAttempts: 10,      // 最大登录尝试次数
+    lockoutDuration: 60000,   // 锁定时长(ms) 1分钟
 };
 
 // 登录尝试记录

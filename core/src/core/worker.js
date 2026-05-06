@@ -477,7 +477,14 @@ async function startBot(config) {
     if (isRunning) return;
     isRunning = true;
 
-    const { code, platform, farmInterval, friendInterval } = config;
+    const { code, platform, farmInterval, friendInterval, userDataDir, userId } = config;
+
+    // 用户 Worker：切换到用户专属数据目录
+    if (userDataDir) {
+        const store = require('../models/store');
+        store.setDataDir(userDataDir);
+        if (userId) process.env.FARM_USER_ID = String(userId);
+    }
 
     CONFIG.platform = platform || 'qq';
     if (farmInterval) {

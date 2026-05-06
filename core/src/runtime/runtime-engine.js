@@ -118,6 +118,14 @@ function createRuntimeEngine(options = {}) {
     restartWorker,
   })
 
+  // 将 worker controls 挂到 dataProvider 上供 user API 使用
+  dataProvider.getWorkerControls = () => ({
+    workers,
+    startWorker,
+    stopWorker,
+    restartWorker,
+  })
+
   runtimeEvents.on('log', (entry) => {
     if (onLog) onLog(entry, entry && entry.accountId ? entry.accountId : '', entry && entry.accountName ? entry.accountName : '')
   })
@@ -150,6 +158,36 @@ function createRuntimeEngine(options = {}) {
     }
   }
 
+  // 僵尸账号清理：每 6 小时执行一次
+  function startZombieCleanup() {
+    const { cleanupZombieAccounts } = require('../services/user-auth');
+    const intervalMs = 6 * 3600 * 1000;
+
+    // 启动后 60 秒执行首次清理
+    setTimeout(() => {
+      try {
+        const cleaned = cleanupZombieAccounts();
+        if (cleaned > 0) {
+          log('系统', `已清理 ${cleaned} 个僵尸账号（过期超 90 天）`);
+        }
+      } catch (e) {
+        log('系统', `僵尸账号清理异常: ${e.message}`);
+      }
+    }, 60000);
+
+    // 之后每 6 小时执行一次
+    setInterval(() => {
+      try {
+        const cleaned = cleanupZombieAccounts();
+        if (cleaned > 0) {
+          log('系统', `已清理 ${cleaned} 个僵尸账号（过期超 90 天）`);
+        }
+      } catch (e) {
+        log('系统', `僵尸账号清理异常: ${e.message}`);
+      }
+    }, intervalMs);
+  }
+
   async function start(options = {}) {
     const shouldStartAdminServer = options.startAdminServer !== false
     const shouldAutoStartAccounts = options.autoStartAccounts !== false
@@ -161,6 +199,9 @@ function createRuntimeEngine(options = {}) {
     if (shouldAutoStartAccounts) {
       startAllAccounts()
     }
+
+    // 启动僵尸账号清理
+    startZombieCleanup()
   }
 
   function stopAllAccounts() {

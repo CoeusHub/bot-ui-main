@@ -1,4 +1,3 @@
-import { useStorage } from '@vueuse/core'
 import axios from 'axios'
 import NProgress from 'nprogress'
 import { createRouter, createWebHistory } from 'vue-router'
@@ -7,35 +6,36 @@ import 'nprogress/nprogress.css'
 
 NProgress.configure({ showSpinner: false })
 
-const adminToken = useStorage('admin_token', '')
-
-async function ensureTokenValid() {
-  const token = String(adminToken.value || '').trim()
-
-  // 首先检查是否禁用了密码认证
+async function ensureAdminTokenValid() {
+  // 直接读 localStorage，避免 useStorage ref 同步延迟
+  const token = String(localStorage.getItem('admin_token') || '').trim()
   try {
     const authCheckResponse = await axios.get('/api/auth/validate', {
       headers: token ? { 'x-admin-token': token } : {},
       timeout: 6000,
     })
-
     if (authCheckResponse.data && authCheckResponse.data.ok) {
       const { valid, passwordDisabled } = authCheckResponse.data.data
-
-      // 如果禁用了密码认证，直接返回true
-      if (passwordDisabled) {
-        return true
-      }
-
-      // 如果启用了密码认证，检查token有效性
-      if (valid && token) {
-        return true
-      }
+      if (passwordDisabled) return true
+      if (valid && token) return true
     }
-
+    return false
+  } catch {
     return false
   }
-  catch {
+}
+
+async function ensureUserTokenValid() {
+  // 直接读 localStorage，避免 useStorage ref 同步延迟
+  const token = String(localStorage.getItem('user_token') || '').trim()
+  if (!token) return false
+  try {
+    const res = await axios.get('/api/user/profile', {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 5000,
+    })
+    return !!(res.data && res.data.ok)
+  } catch {
     return false
   }
 }
@@ -57,36 +57,62 @@ const router = createRouter({
       name: 'login',
       component: () => import('@/views/Login.vue'),
     },
+    {
+      path: '/user/login',
+      name: 'user-login',
+      component: () => import('@/views/user/Login.vue'),
+    },
   ],
 })
 
 router.beforeEach(async (to, _from) => {
   NProgress.start()
 
-  // 首先检查是否禁用了密码认证
-  const authValid = await ensureTokenValid()
-
+  // === 管理员登录页 ===
   if (to.name === 'login') {
-    // 如果已经通过认证（包括禁用密码认证的情况），跳转到首页
-    if (authValid) {
-      return { name: 'dashboard' }
-    }
-    // 否则显示登录页
+    const adminValid = await ensureAdminTokenValid()
+    if (adminValid) return { name: 'dashboard' }
     return true
   }
 
-  // 对于其他页面，检查认证状态
-  if (!authValid) {
-    // 如果认证失败，清除token并跳转到登录页
-    adminToken.value = ''
-    return { name: 'login' }
+  // === 用户登录/注册页 ===
+  if (to.name === 'user-login') {
+    const userValid = await ensureUserTokenValid()
+    if (userValid) return { name: 'dashboard' }
+    return true
   }
 
-  return true
+  // === 需要认证的页面：优先检查用户 token，然后检查管理员 token ===
+  const hadUserToken = !!localStorage.getItem('user_token')
+  const hadAdminToken = !!localStorage.getItem('admin_token')
+
+  const userValid = await ensureUserTokenValid()
+  if (userValid) return true
+
+  const adminValid = await ensureAdminTokenValid()
+  if (adminValid) return true
+
+  // 都无效 → 清除 token，根据之前使用的登录方式跳转
+  localStorage.removeItem('admin_token')
+  localStorage.removeItem('user_token')
+
+  if (hadUserToken) return { name: 'user-login' }
+  if (hadAdminToken) return { name: 'login' }
+  // 首次访问（无任何 token） → 默认跳转用户登录页
+  return { name: 'user-login' }
 })
 
 router.afterEach(() => {
   NProgress.done()
+})
+
+router.onError((error) => {
+  const msg = String(error?.message || '')
+  if (msg.includes('Failed to fetch dynamically imported module')
+    || msg.includes('Importing a module script failed')) {
+    console.warn('[router] chunk load failed, reloading page:', msg)
+    window.location.reload()
+  }
 })
 
 export default router

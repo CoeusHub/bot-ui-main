@@ -12,6 +12,7 @@ import { menuRoutes } from '@/router/menu'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useAppStore } from '@/stores/app'
 import { useStatusStore } from '@/stores/status'
+import { useUserStore } from '@/stores/user'
 
 const accountStore = useAccountStore()
 const statusStore = useStatusStore()
@@ -215,11 +216,17 @@ const connectionStatus = computed(() => {
   }
 })
 
-const navItems = menuRoutes.map(item => ({
-  path: item.path ? `/${item.path}` : '/',
-  label: item.label,
-  icon: item.icon,
-}))
+const userStore = useUserStore()
+
+const navItems = computed(() => {
+  return menuRoutes
+    .filter(item => !item.adminOnly || userStore.isAdminRole)
+    .map(item => ({
+      path: item.path ? `/${item.path}` : '/',
+      label: item.label,
+      icon: item.icon,
+    }))
+})
 
 function selectAccount(acc: any) {
   accountStore.setCurrentAccount(acc)

@@ -26,6 +26,20 @@ function createWorkerManager(options) {
     const managerScheduler = createScheduler('worker_manager');
     const useThreadRuntime = runtimeMode === 'thread' && !processRef.pkg && typeof WorkerThread === 'function';
 
+    // 用户配额：每个 userId 最多同时运行 3 个 worker
+    const USER_MAX_WORKERS = 3;
+    const userWorkerCounts = new Map();
+
+    function decrementUserCount(userId) {
+        if (!userId) return;
+        const current = userWorkerCounts.get(userId) || 0;
+        if (current <= 1) {
+            userWorkerCounts.delete(userId);
+        } else {
+            userWorkerCounts.set(userId, current - 1);
+        }
+    }
+
     function createThreadWorker(account) {
         const worker = new WorkerThread(workerScriptPath, {
             workerData: {
@@ -59,11 +73,28 @@ function createWorkerManager(options) {
         return createForkWorker(account);
     }
 
-    function startWorker(account) {
+    function startWorker(account, opts = {}) {
         if (!account || !account.id) return false;
         if (workers[account.id]) return false; // 已运行
 
-        log('系统', `正在启动账号: ${account.name}`, { accountId: String(account.id), accountName: account.name });
+        const userId = opts.userId || account.userId || '';
+        const userDataDir = opts.userDataDir || account.userDataDir || '';
+
+        // 用户配额检查
+        if (userId) {
+            const current = userWorkerCounts.get(userId) || 0;
+            if (current >= USER_MAX_WORKERS) {
+                log('系统', `用户 ${userId} 已达同时运行上限 (${USER_MAX_WORKERS} 个)`, {
+                    accountId: String(account.id),
+                    accountName: account.name,
+                    userId,
+                });
+                return false;
+            }
+            userWorkerCounts.set(userId, current + 1);
+        }
+
+        log('系统', `正在启动账号: ${account.name}`, { accountId: String(account.id), accountName: account.name, userId: userId || 'admin' });
 
         let child = null;
         try {
@@ -72,28 +103,32 @@ function createWorkerManager(options) {
             const reason = err && err.message ? err.message : String(err || 'unknown error');
             log('错误', `账号 ${account.name} 启动失败: ${reason}`, { accountId: String(account.id), accountName: account.name });
             addAccountLog('start_failed', `账号 ${account.name} 启动失败`, account.id, account.name, { reason });
+            if (userId) decrementUserCount(userId);
             return false;
         }
 
         workers[account.id] = {
             process: child,
-            status: null, // 最新状态快照
+            status: null,
             logs: [],
-            requests: new Map(), // pending API requests
+            requests: new Map(),
             reqId: 1,
             name: account.name,
             stopping: false,
             disconnectedSince: 0,
             autoDeleteTriggered: false,
             wsError: null,
+            userId: userId || '',
         };
 
-        // 发送启动指令
+        // 发送启动指令（包含用户数据目录）
         child.send({
             type: 'start',
             config: {
                 code: account.code,
                 platform: account.platform,
+                userDataDir: userDataDir || '',
+                userId: userId || '',
             },
         });
         child.send({ type: 'config_sync', config: buildConfigSnapshotForAccount(account.id) });
@@ -110,6 +145,7 @@ function createWorkerManager(options) {
         child.on('exit', (code, signal) => {
             const current = workers[account.id];
             const displayName = (current && current.name) || account.name;
+            if (current && current.userId) decrementUserCount(current.userId);
             log('系统', `账号 ${displayName} 进程退出 (code=${code}, signal=${signal || 'none'})`, {
                 accountId: String(account.id),
                 accountName: displayName,
@@ -143,10 +179,10 @@ function createWorkerManager(options) {
         const proc = worker.process;
         worker.stopping = true;
         worker.process.send({ type: 'stop' });
-        // process.kill will happen in 'exit' handler or we can force it
         managerScheduler.setTimeoutTask(`force_kill_${accountId}`, 1000, () => {
             const current = workers[accountId];
             if (current && current.process === proc) {
+                if (current.userId) decrementUserCount(current.userId);
                 current.process.kill();
                 delete workers[accountId];
             }

@@ -9,7 +9,9 @@ const CDKEY_FILE = 'cdkeys.json';
 
 function loadCDKeys() {
   ensureDataDir();
-  return readJsonFile(getDataFile(CDKEY_FILE)) || { keys: {} };
+  const data = readJsonFile(getDataFile(CDKEY_FILE));
+  if (!data || !data.keys) return { keys: {} };
+  return data;
 }
 
 function saveCDKeys(data) {

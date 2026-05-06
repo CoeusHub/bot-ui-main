@@ -39,3 +39,8 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 /.vs
+
+# md
+*.md
+*.mdx
+*.json

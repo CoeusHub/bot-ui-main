@@ -83,7 +83,9 @@ function verifyJWT(token) {
 
 function loadUsers() {
   ensureDataDir();
-  return readJsonFile(getDataFile(USERS_FILE)) || { users: {} };
+  const data = readJsonFile(getDataFile(USERS_FILE));
+  if (!data || !data.users) return { users: {} };
+  return data;
 }
 
 function saveUsers(data) {
@@ -202,6 +204,9 @@ async function loginUser({ username, password }) {
     return { ok: false, error: '用户名或密码错误' };
   }
 
+  if (user.status === 'frozen') {
+    return { ok: false, error: '账号已被冻结，请续期', code: 'ACCOUNT_FROZEN' };
+  }
   if (user.status !== 'active') {
     return { ok: false, error: '账号已被禁用' };
   }
@@ -211,10 +216,16 @@ async function loginUser({ username, password }) {
     return { ok: false, error: '用户名或密码错误' };
   }
 
-  // 检查是否已过期
+  // 检查是否已过期 → 自动冻结
   const now = Math.floor(Date.now() / 1000);
   if (user.expireAt && now > user.expireAt) {
-    return { ok: false, error: '会员已过期，请联系管理员' };
+    user.status = 'frozen';
+    user.updatedAt = Date.now();
+    const db = loadUsers();
+    db.users[user.userId] = user;
+    saveUsers(db);
+    logger.info('用户已过期，自动冻结', { userId: user.userId, username: user.username });
+    return { ok: false, error: '会员已过期，账号已冻结，请续期', code: 'ACCOUNT_EXPIRED' };
   }
 
   const token = generateJWT({ userId: user.userId, role: 'user' });
@@ -251,6 +262,111 @@ function checkAndFreezeExpired(userId) {
 }
 
 /**
+ * 用户续期：用新卡密延长会员时间
+ * @returns {{ ok: boolean, expireAt?: number, error?: string }}
+ */
+async function renewUser({ username, password, cdkey }) {
+  const pw = String(password || '');
+  if (!pw) return { ok: false, error: '请输入密码' };
+
+  const user = getUserByUsername(username);
+  if (!user) return { ok: false, error: '用户名或密码错误' };
+
+  const valid = await verifyPassword(pw, user.passwordHash);
+  if (!valid) return { ok: false, error: '用户名或密码错误' };
+
+  if (user.status !== 'frozen') {
+    return { ok: false, error: '账号状态正常，无需续期' };
+  }
+
+  // 验证卡密
+  const { verifyAndConsumeCDKey, hashKey } = require('./cdkey');
+  const cdkeyResult = verifyAndConsumeCDKey(cdkey);
+  if (!cdkeyResult.ok) return { ok: false, error: cdkeyResult.error };
+
+  // 计算新的到期时间
+  const now = Math.floor(Date.now() / 1000);
+  const oldExpireAt = user.expireAt || now;
+  // 如果已过期超过 30 天，从当前时间开始加；否则在原到期时间基础上叠加
+  const EXPIRED_TOO_LONG = 30 * 86400;
+  const baseTime = (now - oldExpireAt > EXPIRED_TOO_LONG) ? now : oldExpireAt;
+
+  let addSeconds = 0;
+  switch (cdkeyResult.type) {
+    case 'day': addSeconds = (cdkeyResult.days || 1) * 86400; break;
+    case 'month': addSeconds = (cdkeyResult.days || 1) * 30 * 86400; break;
+    case 'permanent': addSeconds = 253402300799 - baseTime; break;
+    default: addSeconds = 86400;
+  }
+
+  user.expireAt = baseTime + addSeconds;
+  user.status = 'active';
+  user.updatedAt = Date.now();
+
+  const db = loadUsers();
+  db.users[user.userId] = user;
+  saveUsers(db);
+
+  logger.info('用户续期成功', { userId: user.userId, username: user.username, expireAt: user.expireAt });
+  return { ok: true, expireAt: user.expireAt };
+}
+
+/**
+ * 管理员手动延期（不消耗卡密）
+ * @returns {{ ok: boolean, expireAt?: number }}
+ */
+function extendUserExpiry(userId, days) {
+  const db = loadUsers();
+  const user = db.users[userId];
+  if (!user) return { ok: false, error: '用户不存在' };
+
+  const now = Math.floor(Date.now() / 1000);
+  const baseTime = (user.expireAt && user.expireAt > now) ? user.expireAt : now;
+  user.expireAt = baseTime + days * 86400;
+  user.status = 'active';
+  user.updatedAt = Date.now();
+
+  db.users[userId] = user;
+  saveUsers(db);
+
+  logger.info('管理员手动延期', { userId, days, newExpireAt: user.expireAt });
+  return { ok: true, expireAt: user.expireAt };
+}
+
+/**
+ * 清理僵尸账号：删除过期超 90 天且已冻结的用户
+ * @returns {number} 清理数量
+ */
+function cleanupZombieAccounts() {
+  const db = loadUsers();
+  const now = Math.floor(Date.now() / 1000);
+  const ZOMBIE_DAYS = 90 * 86400;
+  const fs = require('node:fs');
+  const { getUserDataDir } = require('../config/runtime-paths');
+
+  let cleaned = 0;
+  for (const [userId, user] of Object.entries(db.users)) {
+    if (user.status !== 'frozen') continue;
+    if (!user.expireAt || now - user.expireAt < ZOMBIE_DAYS) continue;
+
+    // 删除用户数据目录
+    try {
+      const dir = getUserDataDir(userId);
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+    } catch (e) { logger.warn('清理用户目录失败', { userId, error: e.message }); }
+
+    delete db.users[userId];
+    cleaned++;
+    logger.info('已清理僵尸账号', { userId, username: user.username });
+  }
+
+  if (cleaned > 0) {
+    saveUsers(db);
+  }
+  return cleaned;
+}
+
+/**
  * 获取用户列表（管理员用）
  */
 function getUserList() {
@@ -276,6 +392,9 @@ module.exports = {
   getUserByUsername,
   registerUser,
   loginUser,
+  renewUser,
+  extendUserExpiry,
+  cleanupZombieAccounts,
   calcExpireAt,
   checkAndFreezeExpired,
   getUserList,

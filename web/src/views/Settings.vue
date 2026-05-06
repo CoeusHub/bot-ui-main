@@ -8,15 +8,27 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import BaseTextarea from '@/components/ui/BaseTextarea.vue'
+import { useRouter } from 'vue-router'
 import { useAccountStore } from '@/stores/account'
 import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
 import { useToastStore } from '@/stores/toast'
+import { useUserStore } from '@/stores/user'
 
 const settingStore = useSettingStore()
 const accountStore = useAccountStore()
 const farmStore = useFarmStore()
 const toast = useToastStore()
+const router = useRouter()
+const userStore = useUserStore()
+
+function handleLogout() {
+  const hadUserToken = !!localStorage.getItem('user_token')
+  localStorage.removeItem('admin_token')
+  localStorage.removeItem('user_token')
+  localStorage.removeItem('current_account_id')
+  router.push(hadUserToken ? '/user/login' : '/login')
+}
 
 const { settings, loading } = storeToRefs(settingStore)
 const { currentAccountId, accounts } = storeToRefs(accountStore)
@@ -1662,8 +1674,21 @@ async function handleTestOffline() {
             </BaseButton>
           </div>
 
-          <!-- 取消密码访问功能 -->
+          <!-- 退出登录 -->
           <div class="mt-4 border-t pt-4 dark:border-gray-700">
+            <div class="flex items-center justify-between">
+              <div>
+                <h4 class="text-sm text-gray-900 font-medium dark:text-gray-100">退出登录</h4>
+                <p class="text-xs text-gray-500 dark:text-gray-400">清除登录状态，返回登录页</p>
+              </div>
+              <BaseButton variant="danger" size="sm" @click="handleLogout">
+                退出登录
+              </BaseButton>
+            </div>
+          </div>
+
+          <!-- 取消密码访问功能（仅管理员） -->
+          <div v-if="userStore.isAdminRole" class="mt-4 border-t pt-4 dark:border-gray-700">
             <div class="mb-3 flex items-center justify-between">
               <div>
                 <h4 class="text-sm text-gray-900 font-medium dark:text-gray-100">
@@ -1689,7 +1714,8 @@ async function handleTestOffline() {
           </div>
         </div>
 
-        <!-- QR Login Header -->
+        <!-- Runtime Client (仅管理员) -->
+        <template v-if="userStore.isAdminRole">
         <div class="border-b border-t bg-gray-50/50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
           <h3 class="flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
             <div class="i-carbon-connection-signal" />
@@ -1766,7 +1792,10 @@ async function handleTestOffline() {
             </BaseButton>
           </div>
         </div>
+        </template>
 
+        <!-- QR Login (仅管理员) -->
+        <template v-if="userStore.isAdminRole">
         <!-- QR Login Header -->
         <div class="border-b border-t bg-gray-50/50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
           <h3 class="flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
@@ -1797,6 +1826,10 @@ async function handleTestOffline() {
             </BaseButton>
           </div>
         </div>
+        </template>
+
+        <!-- Offline Reminder (仅管理员) -->
+        <template v-if="userStore.isAdminRole">
         <!-- Offline Header -->
         <div class="border-b bg-gray-50/50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
           <h3 class="flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
@@ -1911,7 +1944,10 @@ async function handleTestOffline() {
             </BaseButton>
           </div>
         </div>
+        </template>
 
+        <!-- Token Info (仅管理员) -->
+        <template v-if="userStore.isAdminRole">
         <!-- Token Info Header -->
         <div class="border-t bg-gray-50/50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
           <h3 class="flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
@@ -1943,6 +1979,7 @@ async function handleTestOffline() {
             x-admin-token 用于API请求认证，复制后可用于第三方工具调用接口。
           </p>
         </div>
+        </template>
       </div>
     </div>
 

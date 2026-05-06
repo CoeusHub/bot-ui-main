@@ -1,14 +1,36 @@
 const process = require('node:process');
+const path = require('node:path');
 /**
  * 运行时存储 - 自动化开关、种子偏好、账号管理
  */
 
-const { getDataFile, ensureDataDir } = require('../config/runtime-paths');
+const { getDataDir, getDataFile, ensureDataDir } = require('../config/runtime-paths');
 const { CONFIG: BASE_CONFIG } = require('../config/config');
 const { readTextFile, readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
 
-const STORE_FILE = getDataFile('store.json');
-const ACCOUNTS_FILE = getDataFile('accounts.json');
+let _customDataDir = null;
+
+function getStoreFilePath() {
+  if (_customDataDir) return path.join(_customDataDir, 'store.json');
+  return getDataFile('store.json');
+}
+function getAccountsFilePath() {
+  if (_customDataDir) return path.join(_customDataDir, 'accounts.json');
+  return getDataFile('accounts.json');
+}
+
+function setDataDir(customDir) {
+  const prev = _customDataDir;
+  _customDataDir = customDir || null;
+  if (_customDataDir && _customDataDir !== prev) {
+    // 切换目录时清空内存缓存，下次访问会重新加载
+    resetInMemoryCache();
+  }
+}
+
+function getDataDirUsed() {
+  return _customDataDir || getDataDir();
+}
 const ALLOWED_PLANTING_STRATEGIES = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
 const PUSHOO_CHANNELS = new Set([
     'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
@@ -133,6 +155,40 @@ const globalConfig = {
     adminPasswordHash: '',
     disablePasswordAuth: false,
 };
+
+function resetInMemoryCache() {
+    accountFallbackConfig = {
+        ...DEFAULT_ACCOUNT_CONFIG,
+        automation: {
+            ...DEFAULT_ACCOUNT_CONFIG.automation,
+            fertilizer_land_types: [...DEFAULT_FERTILIZER_LAND_TYPES],
+            friend_steal_blacklist: [...DEFAULT_STEAL_PLANT_BLACKLIST],
+        },
+        intervals: { ...DEFAULT_ACCOUNT_CONFIG.intervals },
+        friendBlockLevel: { ...DEFAULT_ACCOUNT_CONFIG.friendBlockLevel },
+        friendQuietHours: { ...DEFAULT_ACCOUNT_CONFIG.friendQuietHours },
+    };
+    Object.assign(globalConfig, {
+        accountConfigs: {},
+        defaultAccountConfig: cloneAccountConfig(DEFAULT_ACCOUNT_CONFIG),
+        ui: { theme: 'dark' },
+        offlineReminder: { ...DEFAULT_OFFLINE_REMINDER },
+        qrLogin: { ...DEFAULT_QR_LOGIN },
+        runtimeClient: { ...DEFAULT_RUNTIME_CLIENT, device_info: { ...DEFAULT_RUNTIME_CLIENT.device_info } },
+        adminPasswordHash: '',
+        disablePasswordAuth: false,
+    });
+}
+
+function ensureCustomDataDir() {
+    if (_customDataDir) {
+        if (!require('node:fs').existsSync(_customDataDir)) {
+            require('node:fs').mkdirSync(_customDataDir, { recursive: true });
+        }
+        return;
+    }
+    ensureDataDir();
+}
 
 function normalizeOfflineReminder(input) {
     const src = (input && typeof input === 'object') ? input : {};
@@ -567,9 +623,9 @@ function ensureAccountConfig(accountId, options = {}) {
 
 // 加载全局配置
 function loadGlobalConfig() {
-    ensureDataDir();
+    ensureCustomDataDir();
     try {
-        const data = readJsonFile(STORE_FILE, () => ({}));
+        const data = readJsonFile(getStoreFilePath(), () => ({}));
         if (data && typeof data === 'object') {
             if (data.defaultAccountConfig && typeof data.defaultAccountConfig === 'object') {
                 accountFallbackConfig = normalizeAccountConfig(data.defaultAccountConfig, DEFAULT_ACCOUNT_CONFIG);
@@ -648,16 +704,16 @@ function sanitizeGlobalConfigBeforeSave() {
 
 // 保存全局配置
 function saveGlobalConfig() {
-    ensureDataDir();
+    ensureCustomDataDir();
     try {
-        const oldJson = readTextFile(STORE_FILE, '');
+        const oldJson = readTextFile(getStoreFilePath(), '');
 
         sanitizeGlobalConfigBeforeSave();
         const newJson = JSON.stringify(globalConfig, null, 2);
         
         if (oldJson !== newJson) {
-            console.warn('[系统] 正在保存配置到:', STORE_FILE);
-            writeJsonFileAtomic(STORE_FILE, globalConfig);
+            console.warn('[系统] 正在保存配置到:', getStoreFilePath());
+            writeJsonFileAtomic(getStoreFilePath(), globalConfig);
         }
     } catch (e) {
         console.error('保存配置失败:', e.message);
@@ -952,14 +1008,14 @@ function setQrLoginConfig(cfg) {
 }
 // ============ 账号管理 ============
 function loadAccounts() {
-    ensureDataDir();
-    const data = readJsonFile(ACCOUNTS_FILE, () => ({ accounts: [], nextId: 1 }));
+    ensureCustomDataDir();
+    const data = readJsonFile(getAccountsFilePath(), () => ({ accounts: [], nextId: 1 }));
     return normalizeAccountsData(data);
 }
 
 function saveAccounts(data) {
-    ensureDataDir();
-    writeJsonFileAtomic(ACCOUNTS_FILE, normalizeAccountsData(data));
+    ensureCustomDataDir();
+    writeJsonFileAtomic(getAccountsFilePath(), normalizeAccountsData(data));
 }
 
 function getAccounts() {
@@ -1060,4 +1116,6 @@ module.exports = {
     setAdminPasswordHash,
     getDisablePasswordAuth,
     setDisablePasswordAuth,
+    setDataDir,
+    getDataDirUsed,
 };
