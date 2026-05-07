@@ -154,6 +154,7 @@ const globalConfig = {
     runtimeClient: { ...DEFAULT_RUNTIME_CLIENT, device_info: { ...DEFAULT_RUNTIME_CLIENT.device_info } },
     adminPasswordHash: '',
     disablePasswordAuth: false,
+    announcement: { content: '', updatedAt: 0 },
 };
 
 function resetInMemoryCache() {
@@ -671,6 +672,12 @@ function loadGlobalConfig() {
             if (typeof data.disablePasswordAuth === 'boolean') {
                 globalConfig.disablePasswordAuth = data.disablePasswordAuth;
             }
+            if (data.announcement && typeof data.announcement === 'object') {
+                globalConfig.announcement = {
+                    content: String(data.announcement.content || ''),
+                    updatedAt: Number(data.announcement.updatedAt) || 0,
+                };
+            }
         }
     } catch (e) {
         console.error('加载配置失败:', e.message);
@@ -738,6 +745,19 @@ function setDisablePasswordAuth(disabled) {
     globalConfig.disablePasswordAuth = Boolean(disabled);
     saveGlobalConfig();
     return globalConfig.disablePasswordAuth;
+}
+
+function getAnnouncement() {
+    return (globalConfig.announcement && globalConfig.announcement.content) || '';
+}
+
+function setAnnouncement(content) {
+    globalConfig.announcement = {
+        content: String(content || ''),
+        updatedAt: Date.now(),
+    };
+    saveGlobalConfig();
+    return globalConfig.announcement.content;
 }
 
 // 初始化加载
@@ -1116,6 +1136,8 @@ module.exports = {
     setAdminPasswordHash,
     getDisablePasswordAuth,
     setDisablePasswordAuth,
+    getAnnouncement,
+    setAnnouncement,
     setDataDir,
     getDataDirUsed,
 };

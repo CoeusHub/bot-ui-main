@@ -60,16 +60,16 @@ export default defineConfig({
   server: {
     proxy: {
       '/socket.io': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:3456',
         changeOrigin: true,
         ws: true,
       },
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:3456',
         changeOrigin: true,
       },
       '/game-config': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:3456',
         changeOrigin: true,
       },
     },

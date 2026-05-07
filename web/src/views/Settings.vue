@@ -36,6 +36,26 @@ const { seeds } = storeToRefs(farmStore)
 
 const saving = ref(false)
 const passwordSaving = ref(false)
+
+// 公告编辑
+const announcementContent = ref('')
+const announcementSaving = ref(false)
+
+async function loadAnnouncement() {
+  try {
+    const { data } = await api.get('/api/announcement')
+    if (data.ok) announcementContent.value = data.data.content || ''
+  } catch { /* ignore */ }
+}
+
+async function saveAnnouncement() {
+  announcementSaving.value = true
+  try {
+    const { data } = await api.post('/api/admin/announcement', { content: announcementContent.value })
+    if (data.ok) toast.success('公告已发布')
+  } catch (e: any) { toast.error('保存失败') }
+  finally { announcementSaving.value = false }
+}
 const offlineSaving = ref(false)
 const offlineTesting = ref(false)
 const qrSaving = ref(false)
@@ -567,6 +587,7 @@ async function loadData() {
 onMounted(() => {
   loadData()
   fetchPasswordAuthStatus()
+  loadAnnouncement()
 })
 
 watch(currentAccountId, () => {
@@ -1629,6 +1650,30 @@ async function handleTestOffline() {
 
       <!-- Card 2: System Settings (Password & Offline) -->
       <div class="card h-full flex flex-col rounded-lg bg-white shadow dark:bg-gray-800">
+        <!-- Announcement Editor (仅管理员) -->
+        <template v-if="userStore.isAdminRole">
+          <div class="border-b bg-gray-50/50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
+            <h3 class="flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
+              <div class="i-carbon-notification" />
+              全站公告
+            </h3>
+          </div>
+          <div class="p-4 space-y-3">
+            <textarea
+              v-model="announcementContent"
+              rows="3"
+              class="w-full border border-gray-200 rounded-lg bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              placeholder="输入公告内容，留空则不显示公告..."
+            />
+            <div class="flex items-center justify-between">
+              <p class="text-xs text-gray-400">所有用户登录后在概览页顶部看到此公告</p>
+              <BaseButton variant="primary" size="sm" :loading="announcementSaving" @click="saveAnnouncement">
+                发布公告
+              </BaseButton>
+            </div>
+          </div>
+        </template>
+
         <!-- Password Header -->
         <div class="border-b bg-gray-50/50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
           <h3 class="flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">

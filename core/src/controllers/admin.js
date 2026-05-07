@@ -188,6 +188,8 @@ function startAdminServer(dataProvider) {
         if (req.path === '/login' || req.path === '/qr/create' || req.path === '/qr/check' || req.path === '/auth/validate' || req.path === '/admin/password-auth-status') return next();
         // 用户 API 不走 admin 鉴权（自带 JWT 验证）
         if (req.path.startsWith('/user/')) return next();
+        // 公告公开读取
+        if (req.path === '/announcement') return next();
         return authRequired(req, res, next);
     });
 
@@ -590,6 +592,18 @@ function startAdminServer(dataProvider) {
     // API: 启动账号
     app.post('/api/accounts/:id/start', (req, res) => {
         try {
+            // JWT 用户：启动自己目录下的 QQ 号
+            if (req.user && req.user.role === 'user') {
+                const data = getUserAccountData(req.user.userId).read();
+                const acc = data.accounts.find(a => a.id === req.params.id);
+                if (!acc) return res.status(404).json({ ok: false, error: '账号不存在' });
+                const wc = provider.getWorkerControls ? provider.getWorkerControls() : {};
+                if (!wc.startWorker) return res.status(500).json({ ok: false, error: '系统未就绪' });
+                const { getUserDataDir } = require('../config/runtime-paths');
+                const ok = wc.startWorker(acc, { userId: req.user.userId, userDataDir: getUserDataDir(req.user.userId) });
+                return res.json({ ok });
+            }
+
             const ok = provider.startAccount(resolveAccId(req.params.id));
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
@@ -603,6 +617,13 @@ function startAdminServer(dataProvider) {
     // API: 停止账号
     app.post('/api/accounts/:id/stop', (req, res) => {
         try {
+            // JWT 用户
+            if (req.user && req.user.role === 'user') {
+                const wc = provider.getWorkerControls ? provider.getWorkerControls() : {};
+                if (wc.stopWorker) { try { wc.stopWorker(req.params.id); } catch {} }
+                return res.json({ ok: true });
+            }
+
             const ok = provider.stopAccount(resolveAccId(req.params.id));
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
@@ -670,6 +691,27 @@ function startAdminServer(dataProvider) {
 
     // API: 设置页统一保存（单次写入+单次广播）
     app.post('/api/settings/save', async (req, res) => {
+        // JWT 用户：写入个人目录
+        if (req.user && req.user.role === 'user') {
+            try {
+                const { ensureUserDataDir, getUserDataDir } = require('../config/runtime-paths');
+                const { readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
+                const dir = getUserDataDir(req.user.userId);
+                ensureUserDataDir(req.user.userId);
+                const file = dir + '/store.json';
+                const current = readJsonFile(file, () => ({}));
+                const body = req.body || {};
+                const allowedKeys = ['automation', 'intervals', 'plantingStrategy', 'preferredSeedId', 'bagSeedPriority', 'friendBlockLevel', 'friendQuietHours', 'ui'];
+                for (const key of allowedKeys) {
+                    if (body[key] !== undefined) current[key] = body[key];
+                }
+                writeJsonFileAtomic(file, current);
+                return res.json({ ok: true });
+            } catch (e) {
+                return res.status(500).json({ ok: false, error: e.message });
+            }
+        }
+
         const id = getAccId(req);
         if (!id) {
             return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
@@ -677,6 +719,27 @@ function startAdminServer(dataProvider) {
         try {
             const data = await provider.saveSettings(id, req.body || {});
             res.json({ ok: true, data: data || {} });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // API: 公告（公开读取）
+    app.get('/api/announcement', (req, res) => {
+        try {
+            const content = store.getAnnouncement ? store.getAnnouncement() : '';
+            res.json({ ok: true, data: { content } });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // API: 保存公告（仅管理员）
+    app.post('/api/admin/announcement', (req, res) => {
+        try {
+            const { content } = req.body || {};
+            const result = store.setAnnouncement ? store.setAnnouncement(String(content || '')) : '';
+            res.json({ ok: true, data: { content: result } });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }
@@ -778,6 +841,27 @@ function startAdminServer(dataProvider) {
     // API: 获取配置
     app.get('/api/settings', async (req, res) => {
         try {
+            // JWT 用户：从个人目录读取
+            if (req.user && req.user.role === 'user') {
+                const { getUserDataDir } = require('../config/runtime-paths');
+                const { readJsonFile } = require('../services/json-db');
+                const file = getUserDataDir(req.user.userId) + '/store.json';
+                const data = readJsonFile(file, () => ({}));
+                return res.json({ ok: true, data: {
+                    intervals: data.intervals || {},
+                    strategy: data.plantingStrategy || '',
+                    preferredSeed: data.preferredSeedId || 0,
+                    bagSeedPriority: data.bagSeedPriority || [],
+                    friendBlockLevel: data.friendBlockLevel || {},
+                    friendQuietHours: data.friendQuietHours || {},
+                    automation: data.automation || {},
+                    ui: data.ui || { theme: 'dark' },
+                    offlineReminder: {},
+                    qrLogin: { apiDomain: 'q.qq.com' },
+                    runtimeClient: null,
+                }});
+            }
+
             const id = getAccId(req);
             // 直接从主进程的 store 读取，确保即使账号未运行也能获取配置
             const intervals = store.getIntervals(id);
@@ -803,9 +887,27 @@ function startAdminServer(dataProvider) {
         }
     });
 
+    // 用户数据隔离：JWT 用户从自己的目录读写
+    function getUserAccountData(userId) {
+        const { getUserDataDir, ensureUserDataDir } = require('../config/runtime-paths');
+        const { readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
+        ensureUserDataDir(userId);
+        const file = getUserDataDir(userId) + '/accounts.json';
+        return {
+            read: () => readJsonFile(file, () => ({ accounts: [], nextId: 1 })),
+            write: (data) => writeJsonFileAtomic(file, data),
+        };
+    }
+
     // API: 账号管理
     app.get('/api/accounts', (req, res) => {
         try {
+            // JWT 用户：从个人目录读取
+            if (req.user && req.user.role === 'user') {
+                const data = getUserAccountData(req.user.userId).read();
+                res.json({ ok: true, data });
+                return;
+            }
             const data = provider.getAccounts();
             res.json({ ok: true, data });
         } catch (e) {
@@ -816,6 +918,21 @@ function startAdminServer(dataProvider) {
     // API: 更新账号备注（兼容旧接口）
     app.post('/api/account/remark', (req, res) => {
         try {
+            // JWT 用户：写入个人目录
+            if (req.user && req.user.role === 'user') {
+                const data = getUserAccountData(req.user.userId);
+                const current = data.read();
+                const body = req.body || {};
+                const ref = body.id || body.accountId || body.uin;
+                const idx = current.accounts.findIndex(a => a.id === String(ref));
+                if (idx >= 0 && body.remark) {
+                    current.accounts[idx].name = String(body.remark).trim();
+                    current.accounts[idx].updatedAt = Date.now();
+                }
+                data.write(current);
+                return res.json({ ok: true, data: current });
+            }
+
             const body = (req.body && typeof req.body === 'object') ? req.body : {};
             const rawRef = body.id || body.accountId || body.uin || req.headers['x-account-id'];
             const accountList = getAccountList();
@@ -845,6 +962,31 @@ function startAdminServer(dataProvider) {
 
     app.post('/api/accounts', async (req, res) => {
         try {
+            // JWT 用户：写入个人目录
+            if (req.user && req.user.role === 'user') {
+                const data = getUserAccountData(req.user.userId);
+                const current = data.read();
+                const body = req.body || {};
+                const isUpdate = !!body.id;
+                if (isUpdate) {
+                    const idx = current.accounts.findIndex(a => a.id === String(body.id));
+                    if (idx >= 0) {
+                        if (body.name !== undefined) current.accounts[idx].name = body.name;
+                        if (body.code !== undefined) current.accounts[idx].code = body.code;
+                        current.accounts[idx].updatedAt = Date.now();
+                    }
+                } else {
+                    const id = String(current.nextId++);
+                    current.accounts.push({
+                        id, name: body.name || `账号${id}`, code: body.code || '',
+                        platform: body.platform || 'qq', gid: '', uin: '', avatar: '',
+                        createdAt: Date.now(), updatedAt: Date.now(),
+                    });
+                }
+                data.write(current);
+                return res.json({ ok: true, data: current });
+            }
+
             const body = (req.body && typeof req.body === 'object') ? req.body : {};
             const isUpdate = !!body.id;
             const resolvedUpdateId = isUpdate ? resolveAccId(body.id) : '';
@@ -928,6 +1070,16 @@ function startAdminServer(dataProvider) {
 
     app.delete('/api/accounts/:id', (req, res) => {
         try {
+            // JWT 用户：从个人目录删除
+            if (req.user && req.user.role === 'user') {
+                const data = getUserAccountData(req.user.userId);
+                const current = data.read();
+                const idx = current.accounts.findIndex(a => a.id === req.params.id);
+                if (idx >= 0) current.accounts.splice(idx, 1);
+                data.write(current);
+                return res.json({ ok: true, data: current });
+            }
+
             const resolvedId = resolveAccId(req.params.id) || String(req.params.id || '');
             const before = provider.getAccounts();
             const target = findAccountByRef(before.accounts || [], req.params.id);
@@ -1042,6 +1194,89 @@ function startAdminServer(dataProvider) {
         }
     });
 
+    // ============ 管理员：操作用户 QQ 账号 ============
+    app.get('/api/admin/users/:userId/accounts', (req, res) => {
+        try {
+            const { getUserDataDir } = require('../config/runtime-paths');
+            const { readJsonFile } = require('../services/json-db');
+            const { userId } = req.params;
+            const file = getUserDataDir(userId) + '/accounts.json';
+            const data = readJsonFile(file, () => ({ accounts: [], nextId: 1 }));
+            res.json({ ok: true, data });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/admin/users/:userId/accounts', async (req, res) => {
+        try {
+            const { getUserDataDir, ensureUserDataDir } = require('../config/runtime-paths');
+            const { readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
+            const { fetchProfileByCode } = require('../services/manual-login-profile');
+            const { userId } = req.params;
+            const { code, platform, name } = req.body || {};
+
+            if (!code) return res.status(400).json({ ok: false, error: '请输入 Code' });
+
+            const dir = getUserDataDir(userId);
+            ensureUserDataDir(userId);
+            const file = dir + '/accounts.json';
+            const data = readJsonFile(file, () => ({ accounts: [], nextId: 1 }));
+
+            // 尝试通过 code 获取昵称头像
+            let avatar = '';
+            let nick = '';
+            try {
+                const profile = await fetchProfileByCode(code, platform || 'qq');
+                if (profile) {
+                    nick = profile.name || '';
+                    if (profile.qq) avatar = `https://q1.qlogo.cn/g?b=qq&nk=${profile.qq}&s=640`;
+                }
+            } catch { /* code 可能无效 */ }
+
+            const id = String(data.nextId++);
+            const account = {
+                id,
+                name: name || nick || `账号${id}`,
+                code,
+                platform: platform || 'qq',
+                gid: '',
+                uin: '',
+                avatar: avatar || '',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+            };
+            data.accounts.push(account);
+            writeJsonFileAtomic(file, data);
+
+            if (provider && provider.addAccountLog) provider.addAccountLog('admin_add_account', `管理员为用户 ${userId} 添加QQ号`, '', '', { userId, accountId: id });
+            res.json({ ok: true, data: account });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.delete('/api/admin/users/:userId/accounts/:accountId', (req, res) => {
+        try {
+            const { getUserDataDir } = require('../config/runtime-paths');
+            const { readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
+            const { userId, accountId } = req.params;
+
+            const file = getUserDataDir(userId) + '/accounts.json';
+            const data = readJsonFile(file, () => ({ accounts: [], nextId: 1 }));
+            const idx = data.accounts.findIndex(a => a.id === accountId);
+            if (idx < 0) return res.status(404).json({ ok: false, error: '账号不存在' });
+
+            data.accounts.splice(idx, 1);
+            writeJsonFileAtomic(file, data);
+
+            if (provider && provider.addAccountLog) provider.addAccountLog('admin_delete_account', `管理员删除用户 ${userId} 的QQ号`, '', '', { userId, accountId });
+            res.json({ ok: true });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
     // ============ 管理员：卡密管理 ============
     app.get('/api/admin/cdkey-stats', (req, res) => {
         try {
@@ -1146,6 +1381,34 @@ function startAdminServer(dataProvider) {
             }
 
             res.json({ ok: true, data: { applied, total: userIds.length } });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // ============ 管理员：所有用户账号总览 ============
+    app.get('/api/admin/all-accounts', (req, res) => {
+        try {
+            const fs = require('node:fs');
+            const { getUserDataDir } = require('../config/runtime-paths');
+            const { readJsonFile } = require('../services/json-db');
+            const { loadUsers } = require('../services/user-auth');
+
+            const db = loadUsers();
+            const result = [];
+
+            for (const [userId, user] of Object.entries(db.users)) {
+                const file = getUserDataDir(userId) + '/accounts.json';
+                const accData = readJsonFile(file, () => ({ accounts: [] }));
+                const accounts = (accData.accounts || []).map(a => ({
+                    ...a,
+                    ownerName: user.username,
+                    ownerId: userId,
+                }));
+                result.push(...accounts);
+            }
+
+            res.json({ ok: true, data: result });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }
@@ -1270,7 +1533,7 @@ function startAdminServer(dataProvider) {
         }
     };
 
-    const port = CONFIG.adminPort || 3000;
+    const port = CONFIG.adminPort || 3456;
     server = app.listen(port, '0.0.0.0', () => {
         adminLogger.info('admin panel started', { url: `http://localhost:${port}`, port });
     });

@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import axios from 'axios'
 import { useStorage } from '@vueuse/core'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import UserAccountModal from '@/components/UserAccountModal.vue'
 import { useToastStore } from '@/stores/toast'
 import { useSettingStore } from '@/stores/setting'
 
@@ -32,6 +33,11 @@ const showExtendModal = ref(false)
 const extendTarget = ref<UserRow | null>(null)
 const extendDays = ref(30)
 const extendSaving = ref(false)
+
+// 管理 QQ 号
+const showAccountModal = ref(false)
+const accountModalUserId = ref('')
+const accountModalUsername = ref('')
 
 function getStrategyLabel(s: string) {
   const map: Record<string, string> = {
@@ -214,6 +220,9 @@ onMounted(fetchUsers)
                   <BaseButton variant="success" size="sm" @click="openExtend(u)">
                     延期
                   </BaseButton>
+                  <BaseButton variant="outline" size="sm" @click="showAccountModal = true; accountModalUserId = u.userId; accountModalUsername = u.username">
+                    管理QQ号
+                  </BaseButton>
                   <BaseButton
                     v-if="u.status === 'active'"
                     variant="danger" size="sm"
@@ -306,5 +315,13 @@ onMounted(fetchUsers)
         </div>
       </div>
     </div>
+
+    <!-- QQ号管理弹窗 -->
+    <UserAccountModal
+      :user-id="accountModalUserId"
+      :username="accountModalUsername"
+      :show="showAccountModal"
+      @close="showAccountModal = false"
+    />
   </div>
 </template>
