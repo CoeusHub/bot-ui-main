@@ -156,12 +156,10 @@ export const useSettingStore = defineStore('setting', () => {
   const loading = ref(false)
 
   async function fetchSettings(accountId: string) {
-    if (!accountId)
-      return
     loading.value = true
     try {
       const { data } = await api.get('/api/settings', {
-        headers: { 'x-account-id': accountId },
+        headers: accountId ? { 'x-account-id': accountId } : {},
       })
       if (data && data.ok && data.data) {
         const d = data.data

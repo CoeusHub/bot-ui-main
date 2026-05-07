@@ -573,14 +573,18 @@ function syncLocalSettings() {
 }
 
 async function loadData() {
+  // 全局配置（runtimeClient、离线提醒等）无论是否选中账号都加载
+  await settingStore.fetchSettings(currentAccountId.value || '')
+
   if (currentAccountId.value) {
-    await settingStore.fetchSettings(currentAccountId.value)
     syncLocalSettings()
-    // Always fetch seeds to ensure correct locked status for current account
     await Promise.all([
       farmStore.fetchSeeds(currentAccountId.value),
       loadStealBlacklistAnalytics(),
     ])
+  } else {
+    // 没选账号时也要同步全局配置到本地状态
+    syncLocalSettings()
   }
 }
 

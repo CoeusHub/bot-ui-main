@@ -841,20 +841,37 @@ function startAdminServer(dataProvider) {
     // API: 获取配置
     app.get('/api/settings', async (req, res) => {
         try {
-            // JWT 用户：从个人目录读取
+            // JWT 用户：从个人目录读取，填充默认值
             if (req.user && req.user.role === 'user') {
                 const { getUserDataDir } = require('../config/runtime-paths');
                 const { readJsonFile } = require('../services/json-db');
                 const file = getUserDataDir(req.user.userId) + '/store.json';
                 const data = readJsonFile(file, () => ({}));
+
+                // 默认自动化配置（与 store.js DEFAULT_ACCOUNT_CONFIG 同步）
+                const defaultAutomation = {
+                    farm: true, farm_manage: true, farm_water: true, farm_weed: true, farm_bug: true,
+                    farm_push: true, land_upgrade: true, friend: true, friend_help_exp_limit: true,
+                    friend_steal: true, friend_steal_blacklist: [], friend_help: true, friend_bad: false,
+                    task: true, email: true, fertilizer_gift: false, fertilizer_buy: false,
+                    fertilizer_buy_type: 'organic', fertilizer_buy_max: 10, fertilizer_buy_mode: 'threshold',
+                    fertilizer_buy_threshold: 100, free_gifts: true, share_reward: true,
+                    vip_gift: true, month_card: true, open_server_gift: true, fertilizer: 'none',
+                    fertilizer_strategy: 'longest', fertilizer_multi_season: false,
+                    fertilizer_land_types: ['gold', 'black', 'red', 'normal'],
+                };
+                const defaultIntervals = { farmMin: 5, farmMax: 10, friendMin: 10, friendMax: 20 };
+                const defaultBlockLevel = { enabled: true, Level: 1 };
+                const defaultQuietHours = { enabled: false, start: '23:00', end: '07:00' };
+
                 return res.json({ ok: true, data: {
-                    intervals: data.intervals || {},
-                    strategy: data.plantingStrategy || '',
+                    intervals: data.intervals || defaultIntervals,
+                    strategy: data.plantingStrategy || 'level',
                     preferredSeed: data.preferredSeedId || 0,
                     bagSeedPriority: data.bagSeedPriority || [],
-                    friendBlockLevel: data.friendBlockLevel || {},
-                    friendQuietHours: data.friendQuietHours || {},
-                    automation: data.automation || {},
+                    friendBlockLevel: data.friendBlockLevel || defaultBlockLevel,
+                    friendQuietHours: data.friendQuietHours || defaultQuietHours,
+                    automation: data.automation || defaultAutomation,
                     ui: data.ui || { theme: 'dark' },
                     offlineReminder: {},
                     qrLogin: { apiDomain: 'q.qq.com' },
