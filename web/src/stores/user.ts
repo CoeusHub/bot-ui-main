@@ -22,8 +22,8 @@ export const useUserStore = defineStore('user', () => {
   const isAdminRole = computed(() => {
     // 用户 JWT 中 role 为 admin
     if (user.value?.role === 'admin') return true
-    // 管理员通过 admin_token 登录（存在 localStorage 中）
-    if (localStorage.getItem('admin_token')) return true
+    // 管理员通过 admin_token 登录 —— 仅当没有 user_token 时
+    if (!localStorage.getItem('user_token') && localStorage.getItem('admin_token')) return true
     return false
   })
   const isLoggedIn = computed(() => !!token.value && !!user.value)
@@ -46,6 +46,8 @@ export const useUserStore = defineStore('user', () => {
     try {
       const res = await axios.post('/api/user/login', { username, password })
       if (res.data.ok) {
+        // 清除 admin token，避免双 token 共存导致身份混淆
+        localStorage.removeItem('admin_token')
         // 先同步写入 localStorage，确保 router.push 时守卫能读到
         localStorage.setItem('user_token', res.data.data.token)
         token.value = res.data.data.token

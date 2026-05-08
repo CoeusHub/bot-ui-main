@@ -448,7 +448,7 @@ const localQrLogin = ref({
 
 const localRuntimeClient = ref({
   serverUrl: 'wss://gate-obt.nqf.qq.com/prod/ws',
-  clientVersion: '1.7.0.6_20260313',
+  clientVersion: '1.10.1.16_20260423',
   os: 'iOS',
   device_info: {
     sys_software: 'iOS 26.2.1',
@@ -718,7 +718,7 @@ const runtimeClientPresetMap = {
       'iPhone 16 Pro Max<iPhone17,2>',
     ],
     defaults: {
-      clientVersion: '1.7.0.6_20260313',
+      clientVersion: '1.10.1.16_20260423',
       sys_software: 'iOS 26.2.1',
       network: 'wifi',
       memory: '7672',
@@ -770,7 +770,7 @@ const runtimeClientPresetMap = {
       'HONOR Magic6<BDY-AN00>',
     ],
     defaults: {
-      clientVersion: '1.7.0.6_20260313',
+      clientVersion: '1.10.1.16_20260423',
       sys_software: 'Android 14',
       network: 'wifi',
       memory: '8192',
@@ -1785,7 +1785,7 @@ async function handleTestOffline() {
               v-model="localRuntimeClient.clientVersion"
               label="游戏版本号"
               type="text"
-              placeholder="例如: 1.7.0.6_20260313"
+              placeholder="例如: 1.10.1.16_20260423"
             />
           </div>
 

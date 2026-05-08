@@ -29,8 +29,8 @@ function mountUserAPI(app, getProvider, getWorkerControls) {
   _getProvider = getProvider || (() => null);
   _getWorkerControls = getWorkerControls || (() => ({}));
 
-  const userLoginLimiter = rateLimitMiddleware({ windowMs: 60000, maxRequests: 30, keyGenerator: (req) => req.ip });
-  const userRegisterLimiter = rateLimitMiddleware({ windowMs: 60000, maxRequests: 20, keyGenerator: (req) => req.ip });
+  const userLoginLimiter = rateLimitMiddleware({ windowMs: 60000, maxRequests: 30, namespace: 'user_login', keyGenerator: (req) => req.bid || req.ip });
+  const userRegisterLimiter = rateLimitMiddleware({ windowMs: 60000, maxRequests: 20, namespace: 'user_register', keyGenerator: (req) => req.bid || req.ip });
 
   // === 注册 ===
   app.post('/api/user/register', userRegisterLimiter, async (req, res) => {
@@ -48,7 +48,7 @@ function mountUserAPI(app, getProvider, getWorkerControls) {
   app.post('/api/user/login', userLoginLimiter, async (req, res) => {
     try {
       try {
-        recordLoginAttempts(`user:${req.ip}`);
+        recordLoginAttempts(`user:${req.bid || req.ip}`);
       } catch (e) {
         return res.status(429).json({ ok: false, error: e.message });
       }
@@ -57,7 +57,7 @@ function mountUserAPI(app, getProvider, getWorkerControls) {
       if (!result.ok) {
         return res.status(401).json({ ok: false, error: result.error, code: result.code || '' });
       }
-      clearLoginAttempts(`user:${req.ip}`);
+      clearLoginAttempts(`user:${req.bid || req.ip}`);
       res.json({ ok: true, data: { token: result.token, user: result.user } });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });

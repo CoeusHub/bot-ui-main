@@ -18,6 +18,8 @@ async function handleLogin() {
   try {
     const res = await api.post('/api/login', { password: password.value })
     if (res.data.ok) {
+      // 清除 user token，避免双 token 共存导致身份混淆
+      localStorage.removeItem('user_token')
       token.value = res.data.data.token
       router.push('/')
     }

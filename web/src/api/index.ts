@@ -11,16 +11,15 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  // 管理员 token
-  const adminToken = tokenRef.value
-  if (adminToken) {
-    config.headers['x-admin-token'] = adminToken
-  }
-
-  // 用户 JWT token（优先于 admin token 时也发送）
+  // 用户 JWT 优先：有 user_token 时只发 JWT，不发 admin token（避免双 token 冲突）
   const userToken = localStorage.getItem('user_token')
   if (userToken) {
     config.headers['Authorization'] = `Bearer ${userToken}`
+  } else {
+    const adminToken = tokenRef.value
+    if (adminToken) {
+      config.headers['x-admin-token'] = adminToken
+    }
   }
 
   const accountId = accountIdRef.value

@@ -53,7 +53,7 @@ export const menuRoutes: MenuItem[] = [
   {
     path: 'admin/users',
     name: 'admin-users',
-    label: '用户管理',
+    label: '用户',
     icon: 'i-carbon-group',
     component: () => import('@/views/admin/Users.vue'),
     adminOnly: true,
@@ -61,7 +61,7 @@ export const menuRoutes: MenuItem[] = [
   {
     path: 'admin/cdkeys',
     name: 'admin-cdkeys',
-    label: '卡密管理',
+    label: '卡密',
     icon: 'i-carbon-password',
     component: () => import('@/views/admin/Cdkeys.vue'),
     adminOnly: true,

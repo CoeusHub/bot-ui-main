@@ -113,15 +113,30 @@ function startAdminServer(dataProvider) {
         res.header('Access-Control-Allow-Origin', '*');
         res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
         res.header('Access-Control-Allow-Headers', 'Content-Type, x-account-id, x-admin-token, Authorization');
+        res.header('Access-Control-Allow-Credentials', 'true');
         if (req.method === 'OPTIONS') return res.sendStatus(200);
         next();
     });
 
-    // 速率限制中间件
+    // 浏览器标识：用 cookie 而非 IP 做速率限制的 key
+    app.use((req, res, next) => {
+        const raw = (req.headers.cookie || '');
+        const match = raw.match(/(?:^|;\s*)bid=([^;]*)/);
+        let bid = match ? match[1] : '';
+        if (!bid) {
+            bid = crypto.randomBytes(12).toString('hex');
+            res.setHeader('Set-Cookie', `bid=${bid}; Path=/; SameSite=Lax; Max-Age=86400`);
+        }
+        req.bid = bid;
+        next();
+    });
+
+    // 速率限制中间件（按浏览器标识）
     app.use('/api', rateLimitMiddleware({
         windowMs: 60000,  // 1分钟
         maxRequests: 100, // 最多100次
-        keyGenerator: (req) => req.ip,
+        namespace: 'global_api',
+        keyGenerator: (req) => req.bid || req.ip,
     }));
 
     // 访问根路径 → 默认跳转用户登录页
@@ -156,7 +171,7 @@ function startAdminServer(dataProvider) {
         
         // 记录登录尝试
         try {
-            recordLoginAttempts(req.ip);
+            recordLoginAttempts(req.bid || req.ip);
         } catch (error) {
             return res.status(429).json({ ok: false, error: error.message });
         }
@@ -178,18 +193,18 @@ function startAdminServer(dataProvider) {
         }
         
         // 登录成功
-        clearLoginAttempts(req.ip);
+        clearLoginAttempts(req.bid || req.ip);
         const token = issueToken();
         tokens.add(token);
         res.json({ ok: true, data: { token } });
     });
 
     app.use('/api', (req, res, next) => {
-        if (req.path === '/login' || req.path === '/qr/create' || req.path === '/qr/check' || req.path === '/auth/validate' || req.path === '/admin/password-auth-status') return next();
-        // 用户 API 不走 admin 鉴权（自带 JWT 验证）
-        if (req.path.startsWith('/user/')) return next();
-        // 公告公开读取
-        if (req.path === '/announcement') return next();
+        // Express app.use 下 req.path 是完整路径（含 /api 前缀），需要去掉前缀比较
+        const p = req.path.replace(/^\/api/, '') || '/';
+        if (p === '/login' || p === '/qr/create' || p === '/qr/check' || p === '/auth/validate' || p === '/admin/password-auth-status') return next();
+        if (p.startsWith('/user/')) return next();
+        if (p === '/announcement') return next();
         return authRequired(req, res, next);
     });
 
@@ -1268,6 +1283,29 @@ function startAdminServer(dataProvider) {
 
             if (provider && provider.addAccountLog) provider.addAccountLog('admin_add_account', `管理员为用户 ${userId} 添加QQ号`, '', '', { userId, accountId: id });
             res.json({ ok: true, data: account });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.put('/api/admin/users/:userId/accounts/:accountId', (req, res) => {
+        try {
+            const { getUserDataDir } = require('../config/runtime-paths');
+            const { readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
+            const { userId, accountId } = req.params;
+            const { code, name } = req.body || {};
+
+            const file = getUserDataDir(userId) + '/accounts.json';
+            const data = readJsonFile(file, () => ({ accounts: [], nextId: 1 }));
+            const idx = data.accounts.findIndex(a => a.id === accountId);
+            if (idx < 0) return res.status(404).json({ ok: false, error: '账号不存在' });
+
+            if (code !== undefined) data.accounts[idx].code = code;
+            if (name !== undefined) data.accounts[idx].name = name;
+            data.accounts[idx].updatedAt = Date.now();
+            writeJsonFileAtomic(file, data);
+
+            res.json({ ok: true, data: data.accounts[idx] });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }

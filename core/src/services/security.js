@@ -240,12 +240,14 @@ function rateLimitMiddleware(options = {}) {
         windowMs = 60000,  // 时间窗口
         maxRequests = 100, // 最大请求数
         keyGenerator = (req) => req.ip,
+        namespace = '',    // 隔离不同限流器的计数
     } = options;
 
     return (req, res, next) => {
-        const key = keyGenerator(req);
+        const rawKey = keyGenerator(req);
+        const key = namespace ? `${namespace}:${rawKey}` : rawKey;
         const now = Date.now();
-        
+
         const record = rateLimitStore.get(key) || { count: 0, resetAt: now + windowMs };
         
         // 重置计数

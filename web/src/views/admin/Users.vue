@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import axios from 'axios'
-import { useStorage } from '@vueuse/core'
+import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import UserAccountModal from '@/components/UserAccountModal.vue'
 import { useToastStore } from '@/stores/toast'
@@ -20,7 +19,6 @@ interface UserRow {
 const users = ref<UserRow[]>([])
 const loading = ref(false)
 const toast = useToastStore()
-const adminToken = useStorage('admin_token', '')
 const settingStore = useSettingStore()
 
 // 策略下发
@@ -55,9 +53,7 @@ function getStrategyLabel(s: string) {
 async function fetchUsers() {
   loading.value = true
   try {
-    const res = await axios.get('/api/admin/users', {
-      headers: { 'x-admin-token': adminToken.value },
-    })
+    const res = await api.get('/api/admin/users')
     if (res.data.ok) users.value = res.data.data
   } catch (e: any) {
     toast.error('获取用户列表失败')
@@ -68,10 +64,7 @@ async function fetchUsers() {
 
 async function toggleStatus(userId: string, newStatus: string) {
   try {
-    const res = await axios.post(`/api/admin/users/${userId}/status`,
-      { status: newStatus },
-      { headers: { 'x-admin-token': adminToken.value } },
-    )
+    const res = await api.post(`/api/admin/users/${userId}/status`, { status: newStatus })
     if (res.data.ok) {
       toast.success('状态更新成功')
       fetchUsers()
@@ -105,10 +98,7 @@ async function handlePolicy() {
       if (s.friendQuietHours) policyConfig.friendQuietHours = JSON.parse(JSON.stringify(s.friendQuietHours))
     }
 
-    const res = await axios.post('/api/admin/policies',
-      { userIds: [policyTarget.value.userId], policyConfig },
-      { headers: { 'x-admin-token': adminToken.value } },
-    )
+    const res = await api.post('/api/admin/policies', { userIds: [policyTarget.value.userId], policyConfig })
     if (res.data.ok) {
       toast.success(`策略已下发到 ${policyTarget.value.username}`)
       showPolicyModal.value = false
@@ -126,10 +116,7 @@ async function handleExtend() {
   if (!extendTarget.value) return
   extendSaving.value = true
   try {
-    const res = await axios.post(`/api/admin/users/${extendTarget.value.userId}/extend`,
-      { days: extendDays.value },
-      { headers: { 'x-admin-token': adminToken.value } },
-    )
+    const res = await api.post(`/api/admin/users/${extendTarget.value.userId}/extend`, { days: extendDays.value })
     if (res.data.ok) {
       toast.success(`已为 ${extendTarget.value.username} 延期 ${extendDays.value} 天`)
       showExtendModal.value = false

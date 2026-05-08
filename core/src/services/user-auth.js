@@ -370,16 +370,29 @@ function cleanupZombieAccounts() {
  * 获取用户列表（管理员用）
  */
 function getUserList() {
+  const fs = require('node:fs');
+  const { getUserDataDir } = require('../config/runtime-paths');
   const db = loadUsers();
-  return Object.values(db.users).map(u => ({
-    userId: u.userId,
-    username: u.username,
-    role: u.role,
-    status: u.status,
-    expireAt: u.expireAt,
-    accountCount: (u.accounts || []).length,
-    createdAt: u.createdAt,
-  }));
+  return Object.values(db.users).map(u => {
+    let accountCount = (u.accounts || []).length;
+    // 从用户数据目录读取实际 QQ 号数量
+    try {
+      const file = getUserDataDir(u.userId) + '/accounts.json';
+      if (fs.existsSync(file)) {
+        const accData = JSON.parse(fs.readFileSync(file, 'utf8'));
+        accountCount = (accData.accounts || []).length;
+      }
+    } catch { /* 忽略读取错误 */ }
+    return {
+      userId: u.userId,
+      username: u.username,
+      role: u.role,
+      status: u.status,
+      expireAt: u.expireAt,
+      accountCount,
+      createdAt: u.createdAt,
+    };
+  });
 }
 
 module.exports = {

@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import axios from 'axios'
-import { useStorage } from '@vueuse/core'
+import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import { useToastStore } from '@/stores/toast'
 
 const toast = useToastStore()
-const adminToken = useStorage('admin_token', '')
 
 const cdkeyType = ref('day')
 const cdkeyDays = ref(1)
@@ -31,11 +29,11 @@ const daysLabel = computed(() => {
 async function generate() {
   generating.value = true
   try {
-    const res = await axios.post('/api/admin/cdkeys/generate', {
+    const res = await api.post('/api/admin/cdkeys/generate', {
       type: cdkeyType.value,
       days: cdkeyDays.value,
       count: cdkeyCount.value,
-    }, { headers: { 'x-admin-token': adminToken.value } })
+    })
     if (res.data.ok) {
       generatedKeys.value = res.data.data.plaintext
       toast.success(`成功生成 ${res.data.data.count} 个卡密`)
@@ -53,10 +51,7 @@ async function importHashes() {
   try {
     const hashes = JSON.parse(importJson.value)
     if (!Array.isArray(hashes)) throw new Error('格式错误')
-    const res = await axios.post('/api/admin/cdkeys/import',
-      { hashes },
-      { headers: { 'x-admin-token': adminToken.value } },
-    )
+    const res = await api.post('/api/admin/cdkeys/import', { hashes })
     if (res.data.ok) {
       toast.success(`成功导入 ${res.data.data.added} 个卡密，跳过 ${hashes.length - res.data.data.added} 个重复`)
       importJson.value = ''
