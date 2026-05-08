@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import UserAccountModal from '@/components/UserAccountModal.vue'
 import { useToastStore } from '@/stores/toast'
 import { useSettingStore } from '@/stores/setting'
@@ -26,6 +27,22 @@ const showPolicyModal = ref(false)
 const policyTarget = ref<UserRow | null>(null)
 const policySaving = ref(false)
 
+// 可编辑的策略参数
+const policyPlantingStrategy = ref('level')
+const policyFarmMin = ref(5)
+const policyFarmMax = ref(10)
+const policyFriendMin = ref(10)
+const policyFriendMax = ref(20)
+
+const strategyOptions = [
+  { label: '最高等级优先', value: 'level' },
+  { label: '最大经验/小时', value: 'max_exp' },
+  { label: '最大收益/小时', value: 'max_profit' },
+  { label: '施肥最大经验/小时', value: 'max_fert_exp' },
+  { label: '施肥最大收益/小时', value: 'max_fert_profit' },
+  { label: '背包种子优先', value: 'bag_priority' },
+]
+
 // 手动延期
 const showExtendModal = ref(false)
 const extendTarget = ref<UserRow | null>(null)
@@ -36,19 +53,6 @@ const extendSaving = ref(false)
 const showAccountModal = ref(false)
 const accountModalUserId = ref('')
 const accountModalUsername = ref('')
-
-function getStrategyLabel(s: string) {
-  const map: Record<string, string> = {
-    preferred: '指定种子',
-    level: '最高等级',
-    max_exp: '最大经验/小时',
-    max_profit: '最大收益/小时',
-    max_fert_exp: '施肥最大经验/小时',
-    max_fert_profit: '施肥最大收益/小时',
-    bag_priority: '优先使用背包种子',
-  }
-  return map[s] || s || '未设置'
-}
 
 async function fetchUsers() {
   loading.value = true
@@ -76,10 +80,14 @@ async function toggleStatus(userId: string, newStatus: string) {
 
 async function openPolicy(u: UserRow) {
   policyTarget.value = u
-  // 确保已加载管理员设置
-  if (!settingStore.settings) {
-    await settingStore.fetchSettings('')
-  }
+  // 默认值从管理员当前设置读取，没有则用内置默认值
+  if (!settingStore.settings) await settingStore.fetchSettings('')
+  const s = settingStore.settings
+  policyPlantingStrategy.value = s?.plantingStrategy || 'level'
+  policyFarmMin.value = s?.intervals?.farmMin || 5
+  policyFarmMax.value = s?.intervals?.farmMax || 10
+  policyFriendMin.value = s?.intervals?.friendMin || 10
+  policyFriendMax.value = s?.intervals?.friendMax || 20
   showPolicyModal.value = true
 }
 
@@ -87,15 +95,14 @@ async function handlePolicy() {
   if (!policyTarget.value) return
   policySaving.value = true
   try {
-    const s = settingStore.settings
-    const policyConfig: any = {}
-    if (s) {
-      if (s.plantingStrategy) policyConfig.plantingStrategy = s.plantingStrategy
-      if (s.preferredSeedId) policyConfig.preferredSeedId = s.preferredSeedId
-      if (s.automation) policyConfig.automation = JSON.parse(JSON.stringify(s.automation))
-      if (s.intervals) policyConfig.intervals = JSON.parse(JSON.stringify(s.intervals))
-      if (s.friendBlockLevel) policyConfig.friendBlockLevel = JSON.parse(JSON.stringify(s.friendBlockLevel))
-      if (s.friendQuietHours) policyConfig.friendQuietHours = JSON.parse(JSON.stringify(s.friendQuietHours))
+    const policyConfig = {
+      plantingStrategy: policyPlantingStrategy.value,
+      intervals: {
+        farmMin: policyFarmMin.value,
+        farmMax: policyFarmMax.value,
+        friendMin: policyFriendMin.value,
+        friendMax: policyFriendMax.value,
+      },
     }
 
     const res = await api.post('/api/admin/policies', { userIds: [policyTarget.value.userId], policyConfig })
@@ -234,37 +241,32 @@ onMounted(fetchUsers)
 
     <!-- 策略下发弹窗 -->
     <div v-if="showPolicyModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="showPolicyModal = false">
-      <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-gray-800 space-y-4">
+      <div class="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl dark:bg-gray-800 space-y-4">
         <h3 class="text-lg font-bold text-gray-900 dark:text-white">
           下发策略到 {{ policyTarget?.username }}
         </h3>
 
-        <div class="rounded-lg bg-gray-50 p-4 text-sm space-y-2 dark:bg-gray-700/50">
-          <p class="text-gray-500 dark:text-gray-400">将使用管理员当前的策略设置：</p>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <span class="text-gray-400 dark:text-gray-500">种植策略</span>
-              <p class="font-medium text-gray-800 dark:text-gray-200">
-                {{ getStrategyLabel(settingStore.settings?.plantingStrategy || '') }}
-              </p>
+        <div class="space-y-3">
+          <div>
+            <label class="text-sm text-gray-500 dark:text-gray-400">种植策略</label>
+            <BaseSelect v-model="policyPlantingStrategy" :options="strategyOptions" class="mt-1" />
+          </div>
+          <div>
+            <label class="text-sm text-gray-500 dark:text-gray-400">农场巡检间隔（秒）</label>
+            <div class="flex items-center gap-2 mt-1">
+              <input v-model.number="policyFarmMin" type="number" min="1" class="w-20 border border-gray-200 rounded-lg bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+              <span class="text-gray-400">~</span>
+              <input v-model.number="policyFarmMax" type="number" min="1" class="w-20 border border-gray-200 rounded-lg bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+              <span class="text-xs text-gray-400">秒</span>
             </div>
-            <div>
-              <span class="text-gray-400 dark:text-gray-500">农场巡检</span>
-              <p class="font-medium text-gray-800 dark:text-gray-200">
-                {{ settingStore.settings?.intervals?.farm ? settingStore.settings.intervals.farm + '秒' : '默认' }}
-              </p>
-            </div>
-            <div>
-              <span class="text-gray-400 dark:text-gray-500">好友巡检</span>
-              <p class="font-medium text-gray-800 dark:text-gray-200">
-                {{ settingStore.settings?.intervals?.friend ? settingStore.settings.intervals.friend + '秒' : '默认' }}
-              </p>
-            </div>
-            <div>
-              <span class="text-gray-400 dark:text-gray-500">自动化开关</span>
-              <p class="font-medium text-gray-800 dark:text-gray-200">
-                {{ settingStore.settings?.automation ? '已配置' : '默认' }}
-              </p>
+          </div>
+          <div>
+            <label class="text-sm text-gray-500 dark:text-gray-400">好友巡检间隔（秒）</label>
+            <div class="flex items-center gap-2 mt-1">
+              <input v-model.number="policyFriendMin" type="number" min="1" class="w-20 border border-gray-200 rounded-lg bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+              <span class="text-gray-400">~</span>
+              <input v-model.number="policyFriendMax" type="number" min="1" class="w-20 border border-gray-200 rounded-lg bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+              <span class="text-xs text-gray-400">秒</span>
             </div>
           </div>
           <p class="text-xs text-amber-600 dark:text-amber-400">
