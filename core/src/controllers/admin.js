@@ -1402,21 +1402,21 @@ function startAdminServer(dataProvider) {
                 const file = dir + '/store.json';
                 const current = readJsonFile(file, () => ({}));
 
-                // 合并策略：管理员下发的作为默认值（defaultAccountConfig），用户已有的自定义值保留
+                // 更新默认配置（新账号用）
+                current.defaultAccountConfig = current.defaultAccountConfig || {};
                 if (policyConfig.automation) {
-                    current.defaultAccountConfig = current.defaultAccountConfig || {};
                     current.defaultAccountConfig.automation = {
                         ...(current.defaultAccountConfig.automation || {}),
                         ...policyConfig.automation,
                     };
                 }
                 if (policyConfig.intervals) {
-                    current.defaultAccountConfig = current.defaultAccountConfig || {};
                     current.defaultAccountConfig.intervals = {
                         ...(current.defaultAccountConfig.intervals || {}),
                         ...policyConfig.intervals,
                     };
                 }
+                // 更新全局设置
                 if (policyConfig.plantingStrategy) {
                     current.plantingStrategy = policyConfig.plantingStrategy;
                 }
@@ -1430,9 +1430,34 @@ function startAdminServer(dataProvider) {
                     current.friendQuietHours = policyConfig.friendQuietHours;
                 }
 
+                // 同步到所有已有账号的配置（Worker 读的是 accountConfigs[id]）
+                const accCfgMap = current.accountConfigs || {};
+                if (typeof accCfgMap === 'object' && Object.keys(accCfgMap).length > 0) {
+                    for (const [accId, accCfg] of Object.entries(accCfgMap)) {
+                        if (policyConfig.intervals && accCfg && typeof accCfg === 'object') {
+                            accCfg.intervals = {
+                                ...(accCfg.intervals || {}),
+                                ...policyConfig.intervals,
+                            };
+                        }
+                        if (policyConfig.automation && accCfg && typeof accCfg === 'object') {
+                            accCfg.automation = {
+                                ...(accCfg.automation || {}),
+                                ...policyConfig.automation,
+                            };
+                        }
+                    }
+                    current.accountConfigs = accCfgMap;
+                }
+
                 current._adminPolicyAppliedAt = Date.now();
                 writeJsonFileAtomic(file, current);
                 applied++;
+            }
+
+            // 广播到所有运行中的 Worker，让已启动的立即生效
+            if (provider && typeof provider.broadcastConfig === 'function') {
+                provider.broadcastConfig('');
             }
 
             res.json({ ok: true, data: { applied, total: userIds.length } });
