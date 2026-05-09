@@ -772,6 +772,14 @@ function getAutomation(accountId) {
 
 function getConfigSnapshot(accountId) {
     const cfg = getAccountConfigSnapshot(accountId);
+    // runtimeClient 始终从全局配置读取，确保管理员修改版本号后所有用户同步
+    let rc = getRuntimeClientConfig();
+    if (_customDataDir) {
+        const prev = _customDataDir;
+        _customDataDir = null;
+        rc = getRuntimeClientConfig();
+        _customDataDir = prev;
+    }
     return {
         automation: { ...cfg.automation },
         plantingStrategy: cfg.plantingStrategy,
@@ -782,7 +790,7 @@ function getConfigSnapshot(accountId) {
         friendBlacklist: [...(cfg.friendBlacklist || [])],
         ui: { ...globalConfig.ui },
         qrLogin: normalizeQrLoginConfig(globalConfig.qrLogin),
-        runtimeClient: getRuntimeClientConfig(),
+        runtimeClient: rc,
     };
 }
 
