@@ -35,6 +35,17 @@ function createRuntimeState(options) {
     }
 
     function buildConfigSnapshotForAccount(accountId) {
+        // runtimeClient 始终从全局配置读取，管理员修改版本号后所有用户同步生效
+        let runtimeClient = null;
+        if (store.getRuntimeClientConfig) {
+            const prevDir = store.getDataDirUsed ? store.getDataDirUsed() : null;
+            try {
+                if (store.setDataDir) store.setDataDir(null); // 切回全局
+                runtimeClient = store.getRuntimeClientConfig();
+            } finally {
+                if (store.setDataDir) store.setDataDir(prevDir); // 恢复用户目录
+            }
+        }
         return {
             automation: store.getAutomation(accountId),
             plantingStrategy: store.getPlantingStrategy(accountId),
@@ -44,7 +55,7 @@ function createRuntimeState(options) {
             friendQuietHours: store.getFriendQuietHours(accountId),
             friendBlacklist: store.getFriendBlacklist(accountId),
             friendCache: store.getFriendCache(accountId),
-            runtimeClient: store.getRuntimeClientConfig ? store.getRuntimeClientConfig() : null,
+            runtimeClient,
             __revision: configRevision,
         };
     }
