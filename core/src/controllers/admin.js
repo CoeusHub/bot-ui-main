@@ -314,6 +314,17 @@ function startAdminServer(dataProvider) {
         return Array.isArray(data.accounts) ? data.accounts : [];
     };
 
+    // JWT 用户：从个人目录读取账号列表
+    function getUserAccountList(userId) {
+        try {
+            const { getUserDataDir } = require('../config/runtime-paths');
+            const { readJsonFile } = require('../services/json-db');
+            const file = getUserDataDir(userId) + '/accounts.json';
+            const data = readJsonFile(file, () => ({ accounts: [] }));
+            return data.accounts || [];
+        } catch { return []; }
+    }
+
     const isSoftRuntimeError = (err) => {
         const msg = String((err && err.message) || '');
         return msg === '账号未运行' || msg === 'API Timeout';
@@ -326,9 +337,17 @@ function startAdminServer(dataProvider) {
         return res.status(500).json({ ok: false, error: err.message });
     }
 
-    const resolveAccId = (rawRef) => {
+    const resolveAccId = (rawRef, req) => {
         const input = normalizeAccountRef(rawRef);
         if (!input) return '';
+
+        // JWT 用户：从个人目录查找账号
+        if (req && req.user && req.user.userId) {
+            const userAccounts = getUserAccountList(req.user.userId);
+            const resolved = resolveAccountId(userAccounts, input);
+            if (resolved) return resolved;
+            return input;
+        }
 
         if (provider && typeof provider.resolveAccountId === 'function') {
             const resolvedByProvider = normalizeAccountRef(provider.resolveAccountId(input));
@@ -341,7 +360,7 @@ function startAdminServer(dataProvider) {
 
     // Helper to get account ID from header
     function getAccId(req) {
-        return resolveAccId(req.headers['x-account-id']);
+        return resolveAccId(req.headers['x-account-id'], req);
     }
 
     // API: 完整状态
@@ -619,7 +638,7 @@ function startAdminServer(dataProvider) {
                 return res.json({ ok });
             }
 
-            const ok = provider.startAccount(resolveAccId(req.params.id));
+            const ok = provider.startAccount(resolveAccId(req.params.id, req));
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
             }
@@ -639,7 +658,7 @@ function startAdminServer(dataProvider) {
                 return res.json({ ok: true });
             }
 
-            const ok = provider.stopAccount(resolveAccId(req.params.id));
+            const ok = provider.stopAccount(resolveAccId(req.params.id, req));
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
             }
@@ -934,9 +953,14 @@ function startAdminServer(dataProvider) {
     // API: 账号管理
     app.get('/api/accounts', (req, res) => {
         try {
-            // JWT 用户：从个人目录读取
+            // JWT 用户：从个人目录读取，注入 running 状态
             if (req.user && req.user.role === 'user') {
                 const data = getUserAccountData(req.user.userId).read();
+                const wc = provider.getWorkerControls ? provider.getWorkerControls() : {};
+                const workers = wc.workers || {};
+                (data.accounts || []).forEach(a => {
+                    a.running = !!(workers[a.id] && workers[a.id].status && workers[a.id].status.connection && workers[a.id].status.connection.connected);
+                });
                 res.json({ ok: true, data });
                 return;
             }
@@ -1112,7 +1136,7 @@ function startAdminServer(dataProvider) {
                 return res.json({ ok: true, data: current });
             }
 
-            const resolvedId = resolveAccId(req.params.id) || String(req.params.id || '');
+            const resolvedId = resolveAccId(req.params.id, req) || String(req.params.id || '');
             const before = provider.getAccounts();
             const target = findAccountByRef(before.accounts || [], req.params.id);
             provider.stopAccount(resolvedId);
@@ -1141,7 +1165,7 @@ function startAdminServer(dataProvider) {
     // API: 日志
     app.get('/api/logs', (req, res) => {
         const queryAccountIdRaw = (req.query.accountId || '').toString().trim();
-        const id = queryAccountIdRaw ? (queryAccountIdRaw === 'all' ? '' : resolveAccId(queryAccountIdRaw)) : getAccId(req);
+        const id = queryAccountIdRaw ? (queryAccountIdRaw === 'all' ? '' : resolveAccId(queryAccountIdRaw, req)) : getAccId(req);
         const options = {
             limit: Number.parseInt(req.query.limit) || 100,
             tag: req.query.tag || '',
@@ -1576,7 +1600,16 @@ function startAdminServer(dataProvider) {
 
     const applySocketSubscription = (socket, accountRef = '') => {
         const incoming = String(accountRef || '').trim();
-        const resolved = incoming && incoming !== 'all' ? resolveAccId(incoming) : '';
+        // JWT 用户：从个人目录解析账号
+        let resolved = '';
+        if (incoming && incoming !== 'all') {
+            if (socket.data.userId) {
+                const userAccounts = getUserAccountList(socket.data.userId);
+                resolved = resolveAccountId(userAccounts, incoming) || incoming;
+            } else {
+                resolved = resolveAccId(incoming);
+            }
+        }
         for (const room of socket.rooms) {
             if (room.startsWith('account:')) socket.leave(room);
         }
@@ -1628,6 +1661,7 @@ function startAdminServer(dataProvider) {
     });
 
     io.use((socket, next) => {
+        // admin token
         const authToken = socket.handshake.auth && socket.handshake.auth.token
             ? String(socket.handshake.auth.token)
             : '';
@@ -1635,11 +1669,27 @@ function startAdminServer(dataProvider) {
             ? String(socket.handshake.headers['x-admin-token'])
             : '';
         const token = authToken || headerToken;
-        if (!token || !tokens.has(token)) {
-            return next(new Error('Unauthorized'));
+        if (token && tokens.has(token)) {
+            socket.data.adminToken = token;
+            return next();
         }
-        socket.data.adminToken = token;
-        return next();
+
+        // JWT token
+        const jwtHeader = socket.handshake.headers && socket.handshake.headers['authorization']
+            ? String(socket.handshake.headers['authorization'])
+            : '';
+        const jwtToken = jwtHeader.startsWith('Bearer ') ? jwtHeader.slice(7) : '';
+        if (jwtToken) {
+            const { verifyJWT } = require('../services/user-auth');
+            const payload = verifyJWT(jwtToken);
+            if (payload && payload.userId) {
+                socket.data.userId = payload.userId;
+                socket.data.userRole = payload.role || 'user';
+                return next();
+            }
+        }
+
+        return next(new Error('Unauthorized'));
     });
 
     io.on('connection', (socket) => {
