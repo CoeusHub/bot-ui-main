@@ -40,10 +40,10 @@ function createRuntimeState(options) {
         if (store.getRuntimeClientConfig) {
             const prevDir = store.getDataDirUsed ? store.getDataDirUsed() : null;
             try {
-                if (store.setDataDir) store.setDataDir(null); // 切回全局
+                store.setDataDir(null); // 切回全局（自动 loadGlobalConfig）
                 runtimeClient = store.getRuntimeClientConfig();
             } finally {
-                if (store.setDataDir) store.setDataDir(prevDir); // 恢复用户目录
+                if (prevDir) store.setDataDir(prevDir); // 恢复用户目录
             }
         }
         return {

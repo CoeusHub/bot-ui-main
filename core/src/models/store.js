@@ -22,9 +22,10 @@ function getAccountsFilePath() {
 function setDataDir(customDir) {
   const prev = _customDataDir;
   _customDataDir = customDir || null;
-  if (_customDataDir && _customDataDir !== prev) {
-    // 切换目录时清空内存缓存，下次访问会重新加载
+  if (_customDataDir !== prev) {
+    // 切换目录时清空缓存并重新加载
     resetInMemoryCache();
+    loadGlobalConfig();
   }
 }
 
@@ -775,10 +776,9 @@ function getConfigSnapshot(accountId) {
     // runtimeClient 始终从全局配置读取，确保管理员修改版本号后所有用户同步
     let rc = getRuntimeClientConfig();
     if (_customDataDir) {
-        const prev = _customDataDir;
-        _customDataDir = null;
+        setDataDir(null);           // 切回全局（自动 loadGlobalConfig）
         rc = getRuntimeClientConfig();
-        _customDataDir = prev;
+        setDataDir(_customDataDir); // 恢复用户目录
     }
     return {
         automation: { ...cfg.automation },
